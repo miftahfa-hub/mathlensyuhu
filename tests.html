@@ -1,0 +1,143 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>MathLens — uji logika inti</title>
+<body style="font:14px system-ui;padding:20px"><h2>Uji logika inti MathLens</h2><pre id="out"></pre>
+<script type="module">
+import * as C from './lib-core.js';
+import { buildDemo } from './lib-seed.js';
+const out = []; let fail = 0;
+const eq = (name, got, want) => { const ok = JSON.stringify(got) === JSON.stringify(want); if (!ok) fail++; out.push(`${ok ? 'LULUS' : 'GAGAL'}  ${name}${ok ? '' : `  → dapat ${JSON.stringify(got)}, harapan ${JSON.stringify(want)}`}`); };
+const q = (id, max, extra = {}) => ({ id, no: 1, maxScore: max, weight: 1, indicators: [], dims: {}, ...extra });
+const A = (qs, extra = {}) => ({ id: 'a', title: 't', classId: 'c', questions: qs, totalMode: 'auto', allowDecimal: false, kkmSource: 'khusus', kkmValue: 75, ...extra });
+const K = { value: 75, source: 'KKM khusus asesmen' };
+const qs = [q('1', 10), q('2', 15), q('3', 20), q('4', 25), q('5', 30)];
+
+// skor maksimal otomatis
+eq('jumlah skor maks 10+15+20+25+30 = 100', C.sumMax(qs), 100);
+// contoh spesifikasi: 82, KKM 75 → +7 Tuntas
+let r = C.computeResult(A(qs), { scores: { 1: 8, 2: 12, 3: 17, 4: 21, 5: 24 } }, K);
+eq('nilai akhir 82', r.final, 82); eq('selisih +7', r.diff, 7); eq('status Tuntas', r.completion, 'tuntas');
+r = C.computeResult(A(qs), { scores: { 1: 6, 2: 10, 3: 14, 4: 17, 5: 21 } }, K);
+eq('nilai akhir 68 → selisih -7 Belum Tuntas', [r.final, r.diff, r.completion], [68, -7, 'belum_tuntas']);
+r = C.computeResult(A(qs), { scores: { 1: 10, 2: 15, 3: 20, 4: 25, 5: 30 } }, { value: 100 });
+eq('nilai = KKM → Tuntas (≥)', r.completion, 'tuntas');
+// kosong ≠ nol
+r = C.computeResult(A(qs), { scores: { 1: 8, 2: 12 } }, K);
+eq('soal belum dinilai → parsial, tanpa nilai akhir/status', [r.state, r.final, r.completion], ['parsial', null, null]);
+r = C.computeResult(A(qs), { scores: { 1: 8, 2: 12, 3: 17, 4: 21, 5: 0 } }, K);
+eq('skor 0 yang diisi dihitung (bukan kosong)', [r.state, r.final], ['lengkap', 58]);
+eq('tanpa submission → kosong', C.computeResult(A(qs), null, K).state, 'kosong');
+// KKM belum ditetapkan
+eq('tanpa KKM → status null', C.computeResult(A(qs), { scores: { 1: 10, 2: 15, 3: 20, 4: 25, 5: 30 } }, { value: null }).completion, null);
+// manual: total berbeda butuh aturan
+let a = A(qs, { totalMode: 'manual', manualTotal: 200 });
+eq('manual ≠ jumlah → validasi minta aturan', C.validateAssessment({ ...a, kkmSource: 'khusus' }).some((e) => e.includes('aturan konversi')), true);
+a.conversionRule = 'proporsional';
+r = C.computeResult(a, { scores: { 1: 8, 2: 12, 3: 17, 4: 21, 5: 24 } }, K);
+eq('manual proporsional 82/100→164/200, nilai akhir 82', [r.displayTotal, r.displayMax, r.final], [164, 200, 82]);
+a.conversionRule = 'langsung';
+r = C.computeResult(a, { scores: { 1: 8, 2: 12, 3: 17, 4: 21, 5: 24 } }, K);
+eq('manual langsung 82/200 → 41', r.final, 41);
+eq('manual sama dengan jumlah → tidak perlu aturan', C.totalInfo(A(qs, { totalMode: 'manual', manualTotal: 100 })).needsRule, false);
+// bobot
+r = C.computeResult(A([q('1', 10, { weight: 1 }), q('2', 10, { weight: 3 })], { useWeights: true }), { scores: { 1: 10, 2: 5 } }, K);
+eq('bobot: (1.0×1 + 0.5×3)/4 = 62.5', r.final, 62.5);
+// validasi
+eq('skor maks 0 ditolak', C.validateAssessment(A([q('1', 0)])).length > 0, true);
+eq('desimal ditolak jika tidak aktif', C.validateAssessment(A([q('1', 2.5)])).some((e) => e.includes('desimal')), true);
+eq('desimal diterima jika aktif', C.validateAssessment(A([q('1', 2.5)], { allowDecimal: true })).length, 0);
+const sepBad = q('1', 10, { indicators: [{ indicatorId: 'i', method: 'separate', maxScore: 4 }, { indicatorId: 'j', method: 'separate', maxScore: 5 }] });
+eq('alokasi indikator 4+5 ≠ 10 ditolak', C.validateAssessment(A([sepBad])).some((e) => e.includes('harus sama')), true);
+// statistik kelas
+const students = ['a', 'b', 'c', 'd'].map((id) => ({ id }));
+const subs = [
+  { assessmentId: 'a', studentId: 'a', scores: { 1: 10, 2: 15, 3: 20, 4: 25, 5: 30 } },
+  { assessmentId: 'a', studentId: 'b', scores: { 1: 5, 2: 5, 3: 5, 4: 5, 5: 5 } },
+  { assessmentId: 'a', studentId: 'c', scores: { 1: 5 } },
+];
+const st = C.classStats(A(qs), subs, students, {}, {});
+eq('ketuntasan kelas hanya dari nilai valid (1 tuntas, 1 belum = 50%)', [st.tuntas, st.belum, st.pct, st.nValid, st.nPartial, st.nNotGraded], [1, 1, 50, 2, 1, 1]);
+eq('belum dinilai tidak jadi belum tuntas', st.belum, 1);
+eq('tanpa data → pct null', C.classStats(A(qs), [], students, {}, {}).pct, null);
+// indikator: tidak menduplikasi skor soal ke banyak indikator
+const mq = [q('1', 10, { indicators: [{ indicatorId: 'i', method: 'whole' }, { indicatorId: 'j', method: 'whole' }] }), q('2', 10, { indicators: [{ indicatorId: 'i', method: 'whole' }] })];
+const ia = C.indicatorAnalysis(A(mq), [{ id: 'i' }, { id: 'j' }], [{ assessmentId: 'a', studentId: 'a', scores: { 1: 8, 2: 6 } }], [{ id: 'a' }], 75);
+eq('indikator multi-soal tanpa skor terpisah: hanya soal tunggal dihitung (6/10=60)', [ia[0].status, ia[0].avg, ia[0].partial], ['ok', 60, true]);
+eq('indikator yang hanya ada di soal multi-indikator → tidak tersedia', ia[1].status, 'tidak_tersedia');
+const sq = [q('1', 10, { indicators: [{ indicatorId: 'i', method: 'separate', maxScore: 4 }, { indicatorId: 'j', method: 'separate', maxScore: 6 }] })];
+const ib = C.indicatorAnalysis(A(sq), [{ id: 'i' }, { id: 'j' }], [{ assessmentId: 'a', studentId: 'a', scores: { 1: 9 }, ind: { 1: { i: 3, j: 6 } } }], [{ id: 'a' }]);
+eq('skor terpisah per indikator: 3/4=75, 6/6=100', [ib[0].avg, ib[1].avg], [75, 100]);
+eq('tanpa KKM → tidak dinyatakan tercapai/gagal', [ib[0].share, ib[0].threshold], [null, null]);
+eq('satu KKM dipakai juga untuk indikator (60 < 75 → 0% siswa mencapai)', [ia[0].threshold, ia[0].reached, ia[0].share], [75, 0, 0]);
+eq('indikator otomatis dari data pembelajaran', C.indicatorsOf({ indicators: [{ id: 'x', learningId: 'L' }, { id: 'y', learningId: 'M' }, { id: 'z', learningId: 'M', status: 'nonaktif' }] }, { learningId: 'M', questions: [] }).map((i) => i.id), ['y']);
+eq('KKM tunggal: nilai asesmen menimpa KKM kelas', [C.resolveKkm({ kkmValue: 70 }, { kkm: 75 }, {}).value, C.resolveKkm({}, { kkm: 75 }, {}).value], [70, 75]);
+eq('langkah status tidak ambigu', C.computeResult(A(qs), { scores: { 1: 8, 2: 12, 3: 17, 4: 21, 5: 24 } }, K).steps.at(-1).includes('TUNTAS'), true);
+// kontak & template
+eq('0812-3456-7890 → +6281234567890', C.normalizePhone('0812-3456-7890'), '+6281234567890');
+eq('+62 812 3456 7890', C.normalizePhone('+62 812 3456 7890'), '+6281234567890');
+eq('6281234567890', C.normalizePhone('6281234567890'), '+6281234567890');
+eq('nomor tak valid → null', C.normalizePhone('12ab'), null);
+eq('email valid/tidak', [C.isEmail('a@b.co'), C.isEmail('a@b'), C.isEmail('')], [true, false, false]);
+const t = C.fillTemplate('Halo {Nama Siswa}, nilai {Nilai Akhir} {X}', { 'Nama Siswa': 'Budi', 'Nilai Akhir': '82' });
+eq('placeholder belum terisi terdeteksi', [t.text, t.missing], ['Halo Budi, nilai 82 {X}', ['X']]);
+eq('CSV: injeksi formula dinetralkan', C.toCsv([['=1+1', 'a,b']]).includes("'=1+1"), true);
+eq('CSV parse kutip & delimiter', C.parseCsv('a;b\n"x;y";2')[1], ['x;y', '2']);
+// data demo konsisten dengan spesifikasi
+const d = buildDemo(); const pa = d.assessments.find((x) => x.id === 'a_pyth');
+eq('demo: skor maks soal 10/15/20/25/30', pa.questions.map((x) => x.maxScore), [10, 15, 20, 25, 30]);
+eq('demo: total 100 & validasi lulus', [C.sumMax(pa.questions), C.validateAssessment(pa)], [100, []]);
+const s15 = d.submissions.find((s) => s.studentId === 's_15' && s.assessmentId === 'a_pyth');
+r = C.computeResult(pa, s15, { value: 75, source: 'x' });
+eq('demo: Aditya 82, KKM 75, +7, Tuntas', [r.total, r.final, r.diff, r.completion], [82, 82, 7, 'tuntas']);
+let consistent = true;
+for (const sub of d.submissions) { const a2 = d.assessments.find((x) => x.id === sub.assessmentId); for (const qq of a2.questions) { const seps = qq.indicators.filter((m) => m.method === 'separate'); if (seps.length && C.isNum(sub.scores[qq.id])) { const sum = seps.reduce((n, m) => n + (sub.ind?.[qq.id]?.[m.indicatorId] ?? NaN), 0); if (sum !== sub.scores[qq.id]) consistent = false; } if (C.isNum(sub.scores[qq.id]) && sub.scores[qq.id] > qq.maxScore) consistent = false; } }
+eq('demo: skor soal = jumlah skor indikator & tidak melebihi maks', consistent, true);
+// ===== bahasa laporan: setiap kalimat penjelasan ≥ 30 kata =====
+import * as N from './lib-narrative.js';
+import { DEFAULT_TEMPLATES } from './lib-seed.js';
+eq('hitung kata: angka dan kode indikator dihitung satu kata', N.countWords('Nilai 82,5 pada PYT-1 tercapai'), 5);
+eq('titik desimal/singkatan tidak memecah kalimat', N.splitSentences('Skor 82.5 mis. sudah baik. Lanjutkan belajar!').map((s) => s.text), ['Skor 82.5 mis. sudah baik.', 'Lanjutkan belajar!']);
+eq('label/daftar tanpa tanda akhir tidak dihitung kalimat', N.checkText('Ringkasan:\n* Nilai: 80\nSalam,\nBu Sari').ok, true);
+eq('kalimat pendek terdeteksi', N.checkText('Kamu sudah baik.').short.length, 1);
+const mkR = (o) => ({ state: 'lengkap', completion: 'tuntas', final: 80, answered: 5, nQuestions: 5, ...o });
+const mkI = (name, mine, thr, status = 'ok') => ({ name, mine, thr, status });
+const scenarios = {
+  tuntas_semua: { r: mkR(), indicators: [mkI('A', 90, 75), mkI('Menafsirkan data pada diagram batang', 80, 75)] },
+  tuntas_sebagian: { r: mkR(), indicators: [mkI('A', 90, 75), mkI('B', 50, 75)] },
+  belum_tuntas_tidak_ada: { r: mkR({ completion: 'belum_tuntas', final: 50 }), indicators: [mkI('A', 40, 75), mkI('B', 50, 75)] },
+  target_indikator_kosong: { r: mkR(), indicators: [mkI('A', 90, null)] },
+  kkm_kosong: { r: mkR({ completion: null }), indicators: [mkI('A', 90, null)] },
+  parsial: { r: mkR({ state: 'parsial', completion: null, final: null, answered: 3 }), indicators: [mkI('A', null, 75, 'belum_ada_data')] },
+  kosong: { r: mkR({ state: 'kosong', completion: null, final: null, answered: 0 }), indicators: [] },
+  indikator_tidak_tersedia: { r: mkR(), indicators: [mkI('A', null, 75, 'tidak_tersedia')] },
+  nama_panjang: { r: mkR(), indicators: [mkI('Menentukan panjang sisi segitiga siku-siku menggunakan Teorema Pythagoras pada permasalahan kontekstual sehari-hari', 60, 75)] },
+};
+const forbidden = /\b(gagal|malas|lemah|bodoh|tidak mampu|tidak berbakat|payah)\b/i;
+let nSent = 0; const bad = [];
+const chk = (label, text) => { const c = N.checkText(text); nSent += c.sentences.filter((s) => s.counted).length; c.short.forEach((s) => bad.push(`${label}: (${s.words}) ${s.text.slice(0, 60)}`)); if (forbidden.test(text)) bad.push(`${label}: kata terlarang`); };
+for (const [k, f] of Object.entries(scenarios)) {
+  f.topic = 'Pecahan'; f.objective = 'Siswa mampu menyelesaikan masalah yang berkaitan dengan pecahan dalam kehidupan sehari-hari.'; f.student = { name: 'Rani' };
+  chk(k + ' status', N.statusText(f.r).text); chk(k + ' ringkasan', N.summaryText({ r: f.r, topic: f.topic, assessment: 'Kuis' }));
+  f.indicators.forEach((x, i) => { const t = N.indicatorText(x); chk(`${k} indikator${i} penjelasan`, t.explain); chk(`${k} indikator${i} saran`, t.advice); });
+  N.masteredText(f).paragraphs.forEach((p, i) => chk(`${k} dikuasai${i}`, p));
+  N.trainText(f).paragraphs.forEach((p, i) => chk(`${k} dilatih${i}`, p));
+  N.autoTeacherNote(f).forEach((p, i) => chk(`${k} catatan${i}`, p));
+  N.autoRecommendation(f).forEach((p, i) => chk(`${k} rekomendasi${i}`, p));
+  N.trainOptions(f).forEach((p, i) => chk(`${k} opsi-latih${i}`, p));
+  N.recommendationOptions(f).forEach((p, i) => chk(`${k} opsi-rek${i}`, p));
+  N.feedbackGroups(f).forEach((g) => g.options.forEach((p, i) => chk(`${k} umpan-${g.title}${i}`, p)));
+}
+for (const names of [[], ['A'], ['A', 'B'], ['Menjumlahkan pecahan berpenyebut berbeda']]) for (const hasRubric of [true, false]) for (const score of [null, 0, 2, 5, 8, 10]) N.questionNote({ score, max: 10, names, hasRubric }).forEach((p) => chk(`soal ${names.length}/${hasRubric}/${score}`, p));
+const vars = { 'Nama Orang Tua/Wali': 'Bu A', 'Nama Siswa': 'Rani', 'Nama Materi': 'Pecahan', 'Nilai Akhir': '80', KKM: '75', 'Status Ketuntasan': 'Tuntas', 'Tautan Laporan': 'https://contoh.test/#/r/abc.def', 'Nama Guru': 'Bu Sari', 'Nama Sekolah': 'SMP X' };
+for (const [k, body] of Object.entries(N.MESSAGE_TEMPLATES)) chk('pesan ' + k, C.fillTemplate(body, vars).text);
+for (const t of DEFAULT_TEMPLATES.filter((x) => x.channel !== 'indikator')) chk('templat seed ' + t.id, C.fillTemplate(t.body, vars).text);
+eq(`semua ${nSent} kalimat penjelasan yang dihasilkan ≥ 30 kata, tanpa kata terlarang`, bad, []);
+if (bad.length) out.push('   ' + bad.slice(0, 12).join('\n   '));
+eq('tuntas: label dan nada', [N.statusText(scenarios.tuntas_semua.r).label, N.statusText(scenarios.belum_tuntas_tidak_ada.r).label, N.statusText(scenarios.parsial.r).label, N.statusText(scenarios.kosong.r).label, N.statusText(scenarios.kkm_kosong.r).label], ['Tuntas', 'Perlu Penguatan', 'Penilaian Berlangsung', 'Belum Dinilai', 'Target Belum Ditetapkan']);
+eq('tanpa target indikator tidak dinyatakan perlu penguatan', N.indicatorText(mkI('A', 10, null)).label, 'Target Belum Ditetapkan');
+eq('skor 0 yang valid tidak dianggap tidak paham', /tanpa menyimpulkan/.test(N.questionNote({ score: 0, max: 10, names: ['A'], hasRubric: true })[0]), true);
+eq('indikator mengikuti nama dari data guru', N.indicatorText(mkI('Menafsirkan data pada diagram batang', 90, 75)).explain.includes('menafsirkan data pada diagram batang'), true);
+eq('kalimat khusus guru yang pendek ditandai, tidak diubah', N.checkText('Bagus sekali, teruskan.').short.length, 1);
+document.getElementById('out').textContent = out.join('\n') + `\n\n${out.length - fail}/${out.length} lulus`;
+window.__fail = fail; window.__total = out.length;
+</script>
